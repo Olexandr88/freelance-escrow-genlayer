@@ -30,22 +30,23 @@ class _EOA:
 
 def _payout_pct(criteria: list, scores: list) -> int:
     """
-    Deterministic payout percentage: sum(weight * score) over all criteria,
-    each score clamped to [0, 1], rounded to PAYOUT_STEP. Criteria missing
-    from the scores count as 0.
+    Deterministic payout percentage: sum(weight * score / 100) over all
+    criteria, where each score is an integer 0-100 clamped to that range,
+    rounded to PAYOUT_STEP. Criteria missing from the scores count as 0.
+    Integers only: floats are not calldata-encodable between validators.
     """
     by_name = {}
     for s in scores:
         if isinstance(s, dict) and "name" in s:
             try:
-                by_name[str(s["name"])] = float(s.get("score", 0))
+                by_name[str(s["name"])] = int(round(float(s.get("score", 0))))
             except (TypeError, ValueError):
-                by_name[str(s["name"])] = 0.0
-    total = 0.0
+                by_name[str(s["name"])] = 0
+    total = 0
     for c in criteria:
-        score = max(0.0, min(1.0, by_name.get(str(c["name"]), 0.0)))
+        score = max(0, min(100, by_name.get(str(c["name"]), 0)))
         total += int(c["weight"]) * score
-    pct = int(round(total / PAYOUT_STEP) * PAYOUT_STEP)
+    pct = int(round(total / 100 / PAYOUT_STEP) * PAYOUT_STEP)
     return max(0, min(100, pct))
 
 
@@ -119,13 +120,13 @@ class FreelanceEscrow(gl.Contract):
 JOB: {title}
 ACCEPTANCE CRITERIA (JSON): {criteria_json}
 
-Read the delivered work below. For EACH criterion, give a score from 0 to 1
-(0 = not delivered, 1 = fully delivered) based ONLY on evidence in the
+Read the delivered work below. For EACH criterion, give an integer score from 0 to 100
+(0 = not delivered, 100 = fully delivered) based ONLY on evidence in the
 delivered work. Do not invent evidence and do not reward claims without proof.
 
 Respond using ONLY the following JSON format, nothing else:
 {{
-  "scores": [{{"name": str, "score": float}}],
+  "scores": [{{"name": str, "score": int}}],
   "reasoning": str
 }}
 Use the exact criterion names in "scores", one entry per criterion, and give
@@ -150,7 +151,16 @@ This result must be perfectly parsable by a JSON parser without errors.
                 prompt + f"\n\nDELIVERED WORK:\n{page[:8000]}",
                 response_format="json",
             )
-            scores = raw.get("scores", [])
+            if not isinstance(raw, dict):
+                raw = {}
+            scores = []
+            for item in raw.get("scores", []):
+                if isinstance(item, dict) and "name" in item:
+                    try:
+                        value = int(round(float(item.get("score", 0))))
+                    except (TypeError, ValueError):
+                        value = 0
+                    scores.append({"name": str(item["name"]), "score": max(0, min(100, value))})
             return {
                 "scores": scores,
                 "payout_pct": _payout_pct(criteria, scores),

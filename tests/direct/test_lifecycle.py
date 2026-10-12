@@ -28,10 +28,10 @@ CRITERIA = json.dumps(
 
 # Per-criterion scores (README, Tests, Demo) and the payout they produce:
 #   20*r + 50*t + 30*d
-SCORES_50 = (1.0, 0.0, 1.0)  # 20 + 0 + 30  = 50
-SCORES_70 = (1.0, 0.4, 1.0)  # 20 + 20 + 30 = 70
-SCORES_90 = (1.0, 0.8, 1.0)  # 20 + 40 + 30 = 90
-SCORES_OVER = (2.0, 2.0, 2.0)  # each score is clamped to 1 -> 100
+SCORES_50 = (100, 0, 100)
+SCORES_70 = (100, 40, 100)
+SCORES_90 = (100, 80, 100)
+SCORES_OVER = (200, 200, 200)
 
 
 @pytest.fixture

@@ -3,7 +3,7 @@ name = "freelance-escrow-tests"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
-    "genlayer-test",  # pin to the exact version after the first local run (see README)
+    "genlayer-test==0.29.2",
 ]
 
 [tool.pytest.ini_options]
