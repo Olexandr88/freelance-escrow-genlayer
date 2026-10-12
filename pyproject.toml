@@ -1,12 +1,14 @@
 [project]
-name = "freelance-escrow-genlayer"
+name = "freelance-escrow-tests"
 version = "0.1.0"
-description = "Freelance escrow with AI arbitration as a GenLayer Intelligent Contract"
 requires-python = ">=3.12"
 dependencies = [
-  # Pin exact versions from your environment (run: pip freeze | grep -i gen), e.g.:
-  # "genlayer-test==X.Y.Z",
+    "genlayer-test",  # pin to the exact version after the first local run (see README)
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
 
 [tool.gltest]
 contracts_dir = "contracts"
