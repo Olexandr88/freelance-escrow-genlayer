@@ -1,0 +1,12 @@
+[project]
+name = "freelance-escrow-genlayer"
+version = "0.1.0"
+description = "Freelance escrow with AI arbitration as a GenLayer Intelligent Contract"
+requires-python = ">=3.12"
+dependencies = [
+  # Pin exact versions from your environment (run: pip freeze | grep -i gen), e.g.:
+  # "genlayer-test==X.Y.Z",
+]
+
+[tool.gltest]
+contracts_dir = "contracts"
