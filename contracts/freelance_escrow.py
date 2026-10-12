@@ -125,9 +125,11 @@ delivered work. Do not invent evidence and do not reward claims without proof.
 
 Respond using ONLY the following JSON format, nothing else:
 {{
-  "scores": [{{"name": str, "score": float}}],  // one entry per criterion, using the exact criterion names
-  "reasoning": str                              // two or three sentences citing the evidence
+  "scores": [{{"name": str, "score": float}}],
+  "reasoning": str
 }}
+Use the exact criterion names in "scores", one entry per criterion, and give
+two or three sentences citing the evidence in "reasoning".
 This result must be perfectly parsable by a JSON parser without errors.
 """
 
@@ -162,12 +164,12 @@ This result must be perfectly parsable by a JSON parser without errors.
             if "payout_pct" not in leader_out or "reasoning" not in leader_out:
                 return False
             # The leader's payout must follow from its own scores and the weights.
-            if int(leader_out["payout_pct"]) != _payout_pct(
-                criteria, leader_out.get("scores", [])
-            ):
+            expected = _payout_pct(criteria, leader_out.get("scores", []))
+            if int(leader_out["payout_pct"]) != expected:
                 return False
             mine = leader_fn()
-            return abs(int(mine["payout_pct"]) - int(leader_out["payout_pct"])) <= PAYOUT_TOLERANCE
+            diff = abs(int(mine["payout_pct"]) - int(leader_out["payout_pct"]))
+            return diff <= PAYOUT_TOLERANCE
 
         return gl.vm.run_nondet_unsafe(leader_fn, validator_fn)
 
@@ -179,3 +181,141 @@ This result must be perfectly parsable by a JSON parser without errors.
     def _pay_out(self, job: Job) -> None:
         """Split the escrow: freelancer gets freelancer_pct, the client gets the rest."""
         if job.paid:
+            raise gl.vm.UserError("Already paid out")
+        job.paid = True
+        to_freelancer = u256(int(job.amount) * int(job.freelancer_pct) // 100)
+        to_client = u256(int(job.amount) - int(to_freelancer))
+        self.escrow_balance = u256(int(self.escrow_balance) - int(job.amount))
+        if to_freelancer > u256(0):
+            _EOA(job.freelancer).emit_transfer(value=to_freelancer)
+        if to_client > u256(0):
+            _EOA(job.client).emit_transfer(value=to_client)
+
+    # ---------- lifecycle ----------
+
+    @gl.public.write.payable
+    def create_job(self, freelancer: Address, title: str, criteria_json: str) -> u32:
+        """The attached GEN is locked as the escrow for this job."""
+        amount = gl.message.value
+        if amount == u256(0):
+            raise gl.vm.UserError("Send some GEN to fund the escrow")
+        if freelancer == gl.message.sender_address:
+            raise gl.vm.UserError("Client and freelancer must be different accounts")
+        self._parse_criteria(criteria_json)
+
+        job_id = self.next_id
+        self.jobs[job_id] = Job(
+            client=gl.message.sender_address,
+            freelancer=freelancer,
+            title=title,
+            criteria_json=criteria_json,
+            amount=amount,
+            status=CREATED,
+            deliverable_url="",
+            verdict_json="",
+            freelancer_pct=u32(0),
+            appealed=False,
+            paid=False,
+        )
+        self.escrow_balance = u256(int(self.escrow_balance) + int(amount))
+        self.next_id = u32(int(job_id) + 1)
+        return job_id
+
+    @gl.public.write
+    def submit_work(self, job_id: u32, url: str) -> None:
+        job = self._get(job_id)
+        if gl.message.sender_address != job.freelancer:
+            raise gl.vm.UserError("Only the freelancer can submit work")
+        if job.status != CREATED:
+            raise gl.vm.UserError("Job is not in CREATED state")
+        if not (url.startswith("http://") or url.startswith("https://")):
+            raise gl.vm.UserError("Deliverable must be an http(s) URL")
+        job.deliverable_url = url
+        job.status = SUBMITTED
+        self.jobs[job_id] = job
+
+    @gl.public.write
+    def approve(self, job_id: u32) -> None:
+        job = self._get(job_id)
+        if gl.message.sender_address != job.client:
+            raise gl.vm.UserError("Only the client can approve")
+        if job.status != SUBMITTED:
+            raise gl.vm.UserError("Nothing to approve")
+        job.freelancer_pct = u32(100)
+        job.status = RELEASED
+        self._pay_out(job)
+        self.jobs[job_id] = job
+
+    @gl.public.write
+    def dispute(self, job_id: u32) -> typing.Any:
+        job = self._get(job_id)
+        if gl.message.sender_address not in (job.client, job.freelancer):
+            raise gl.vm.UserError("Only the parties can dispute")
+        if job.status != SUBMITTED:
+            raise gl.vm.UserError("Job is not in SUBMITTED state")
+        verdict = self._evaluate(job)
+        self._apply_verdict(job, verdict, RESOLVED)
+        self.jobs[job_id] = job
+        return {
+            "job_id": job_id,
+            "status": job.status,
+            "payout_pct": job.freelancer_pct,
+        }
+
+    @gl.public.write
+    def appeal(self, job_id: u32) -> typing.Any:
+        """One appeal per job: validators re-evaluate; the result is final and paid out."""
+        job = self._get(job_id)
+        if gl.message.sender_address not in (job.client, job.freelancer):
+            raise gl.vm.UserError("Only the parties can appeal")
+        if job.status != RESOLVED or job.appealed:
+            raise gl.vm.UserError("Appeal not available")
+        job.appealed = True
+        verdict = self._evaluate(job)
+        self._apply_verdict(job, verdict, FINAL)
+        self._pay_out(job)
+        self.jobs[job_id] = job
+        return {
+            "job_id": job_id,
+            "status": job.status,
+            "payout_pct": job.freelancer_pct,
+        }
+
+    @gl.public.write
+    def settle(self, job_id: u32) -> None:
+        """Accept the arbitration verdict without appealing: pay out and close the job."""
+        job = self._get(job_id)
+        if gl.message.sender_address not in (job.client, job.freelancer):
+            raise gl.vm.UserError("Only the parties can settle")
+        if job.status != RESOLVED:
+            raise gl.vm.UserError("Nothing to settle")
+        job.status = FINAL
+        self._pay_out(job)
+        self.jobs[job_id] = job
+
+    # ---------- reads ----------
+
+    @gl.public.view
+    def get_job(self, job_id: u32) -> typing.Any:
+        job = self._get(job_id)
+        return {
+            "client": job.client,
+            "freelancer": job.freelancer,
+            "title": job.title,
+            "amount": int(job.amount),
+            "status": job.status,
+            "deliverable_url": job.deliverable_url,
+            "verdict": json.loads(job.verdict_json) if job.verdict_json else None,
+            "freelancer_pct": int(job.freelancer_pct),
+            "freelancer_amount": int(job.amount) * int(job.freelancer_pct) // 100,
+            "appealed": job.appealed,
+            "paid": job.paid,
+        }
+
+    @gl.public.view
+    def get_escrow_balance(self) -> u256:
+        return self.escrow_balance
+
+    @gl.public.view
+    def total_jobs(self) -> u32:
+        return self.next_id
